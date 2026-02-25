@@ -8,6 +8,8 @@ import logging
 import yt_dlp
 import json
 import copy
+import numpy as np
+import soundfile as sf
 import gradio as gr
 import urllib.parse
 import assets.themes.loadThemes as loadThemes
@@ -782,6 +784,119 @@ def demucs_separator(audio, model, out_format, shifts, segment_size, segments_en
 
     except Exception as e:
         raise RuntimeError(f"Demucs separation failed: {e}") from e
+
+def _get_ensemble_model_list():
+    """Return a combined list of all available model display names for ensemble selection."""
+    return list(roformer_models.keys()) + mdx23c_models + mdxnet_models + vrarch_models + demucs_models
+
+def _create_separator_for_model(model_display_name, out_format):
+    """Create a Separator and return (separator, model_filename) for the given model display name."""
+    if model_display_name in roformer_models:
+        model_filename = roformer_models[model_display_name]
+        separator = Separator(
+            log_level=logging.WARNING,
+            model_file_dir=models_dir,
+            output_dir=out_dir,
+            output_format=out_format,
+            use_autocast=use_autocast,
+        )
+    elif model_display_name in mdx23c_models:
+        model_filename = model_display_name
+        separator = Separator(
+            log_level=logging.WARNING,
+            model_file_dir=models_dir,
+            output_dir=out_dir,
+            output_format=out_format,
+            use_autocast=use_autocast,
+        )
+    elif model_display_name in mdxnet_models:
+        model_filename = model_display_name
+        separator = Separator(
+            log_level=logging.WARNING,
+            model_file_dir=models_dir,
+            output_dir=out_dir,
+            output_format=out_format,
+            use_autocast=use_autocast,
+        )
+    elif model_display_name in vrarch_models:
+        model_filename = model_display_name
+        separator = Separator(
+            log_level=logging.WARNING,
+            model_file_dir=models_dir,
+            output_dir=out_dir,
+            output_format=out_format,
+            use_autocast=use_autocast,
+        )
+    elif model_display_name in demucs_models:
+        model_filename = model_display_name
+        separator = Separator(
+            log_level=logging.WARNING,
+            model_file_dir=models_dir,
+            output_dir=out_dir,
+            output_format=out_format,
+            use_autocast=use_autocast,
+        )
+    else:
+        return None, None
+    return separator, model_filename
+
+@track_presence("Performing Ensemble Separation")
+def ensemble_separator(audio, model_list, algorithm, out_format, progress=gr.Progress(track_tqdm=True)):
+    """Run multiple models on the input audio and combine the primary stems using the chosen algorithm."""
+    if not model_list or len(model_list) < 2:
+        raise gr.Error(i18n("Please select at least 2 models for ensemble separation"))
+
+    stem_arrays = []
+    sample_rate = None
+
+    for i, model_display_name in enumerate(model_list):
+        progress((i / len(model_list)) * 0.9, desc=f"Running model {i + 1}/{len(model_list)}: {model_display_name}...")
+
+        separator, model_filename = _create_separator_for_model(model_display_name, out_format)
+        if separator is None:
+            raise gr.Error(f"Unknown model: {model_display_name}")
+
+        separator.load_model(model_filename=model_filename)
+        separation = separator.separate(audio)
+
+        if not separation:
+            raise gr.Error(f"Model {model_display_name} produced no output")
+
+        # Load the primary (first) stem for ensembling
+        stem_path = os.path.join(out_dir, separation[0])
+        audio_data, sr = sf.read(stem_path)
+        stem_arrays.append(audio_data)
+        if sample_rate is None:
+            sample_rate = sr
+
+    progress(0.95, desc="Applying ensemble algorithm...")
+
+    # Trim all stems to the shortest length to allow stacking
+    min_len = min(arr.shape[0] for arr in stem_arrays)
+    stem_arrays = [arr[:min_len] for arr in stem_arrays]
+    stacked = np.stack(stem_arrays, axis=0)
+
+    # Apply the chosen ensemble algorithm element-wise
+    if algorithm == "average":
+        result = np.mean(stacked, axis=0)
+    elif algorithm == "min":
+        result = np.min(stacked, axis=0)
+    elif algorithm == "max":
+        result = np.max(stacked, axis=0)
+    elif algorithm == "median":
+        result = np.median(stacked, axis=0)
+    else:
+        result = np.mean(stacked, axis=0)
+
+    # Clip to valid audio range and save
+    result = np.clip(result.astype(np.float32), -1.0, 1.0)
+    input_basename = os.path.splitext(os.path.basename(audio))[0]
+    output_filename = f"ensemble_{algorithm}_{input_basename}.{out_format}"
+    output_path = os.path.join(out_dir, output_filename)
+    sf.write(output_path, result, sample_rate)
+
+    progress(1.0, desc="Ensemble separation complete!")
+    return output_path
 
 def update_stems(model):
     if model == "htdemucs_6s.yaml" or model == "MDX23C-DrumSep-aufr33-jarredou.ckpt":
@@ -2245,6 +2360,52 @@ with gr.Blocks(theme = loadThemes.load_json() or "NoCrypt/miku", title = "🎵 U
             demucs_model.change(update_stems, inputs=[demucs_model], outputs=stem6)
                 
             demucs_button.click(demucs_separator, [demucs_audio, demucs_model, demucs_output_format, demucs_shifts, demucs_segment_size, demucs_segments_enabled, demucs_overlap, demucs_batch_size, demucs_normalization_threshold, demucs_amplification_threshold], [demucs_stem1, demucs_stem2, demucs_stem3, demucs_stem4, demucs_stem5, demucs_stem6])
+
+        with gr.TabItem(i18n("Ensemble")):
+            gr.Markdown(i18n("Run multiple models and combine their primary stems using an ensemble algorithm."))
+            with gr.Row():
+                ensemble_model_list = gr.Dropdown(
+                    label = i18n("Select models for ensemble"),
+                    info = i18n("Select 2 or more models to ensemble (all model types supported)"),
+                    choices = _get_ensemble_model_list(),
+                    multiselect = True,
+                    interactive = True
+                )
+                ensemble_output_format = gr.Dropdown(
+                    label = i18n("Select the output format"),
+                    choices = output_format,
+                    value = "wav",
+                    interactive = True
+                )
+            with gr.Row():
+                ensemble_algorithm = gr.Dropdown(
+                    label = i18n("Ensemble algorithm"),
+                    info = i18n("Algorithm used to combine the stem outputs from each model"),
+                    choices = ["average", "min", "max", "median"],
+                    value = "average",
+                    interactive = True
+                )
+            with gr.Row():
+                ensemble_audio = gr.Audio(
+                    label = i18n("Input audio"),
+                    type = "filepath",
+                    interactive = True
+                )
+            with gr.Row():
+                ensemble_button = gr.Button(i18n("Separate!"), variant = "primary")
+            with gr.Row():
+                ensemble_output = gr.Audio(
+                    show_download_button = True,
+                    interactive = False,
+                    label = i18n("Ensembled output"),
+                    type = "filepath"
+                )
+
+            ensemble_button.click(
+                ensemble_separator,
+                [ensemble_audio, ensemble_model_list, ensemble_algorithm, ensemble_output_format],
+                [ensemble_output]
+            )
 
         with gr.TabItem(i18n("Leaderboard")):
             with gr.Group():
