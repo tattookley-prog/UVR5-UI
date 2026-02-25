@@ -863,39 +863,53 @@ def ensemble_separator(audio, model_list, algorithm, out_format, progress=gr.Pro
         if not separation:
             raise gr.Error(f"Model {model_display_name} produced no output")
 
-        # Identify stems by filename: find the vocal stem and the non-vocal (primary) stem.
+        # Identify stems by filename: separate vocal files from all non-vocal files.
         # The audio-separator library names output files with stem type labels such as
         # "(Vocals)", "(Instrumental)", "(No Vocals)", etc.  We cannot rely on the
         # position in the list because different models return stems in different orders.
-        vocal_file = None
-        primary_file = None
+        # Multi-stem models (e.g. Demucs htdemucs_ft) produce bass/drums/other in
+        # addition to vocals; all non-vocal stems must be summed into one instrumental
+        # track before ensembling so that none of them are silently discarded.
+        vocal_files = []
+        non_vocal_files = []
         for fname in separation:
             fname_lower = fname.lower()
             if "(vocals)" in fname_lower or "_vocals_" in fname_lower or fname_lower.startswith("vocals_"):
-                vocal_file = fname
+                vocal_files.append(fname)
             else:
-                if primary_file is None:
-                    primary_file = fname
+                non_vocal_files.append(fname)
 
         # Fall back to positional behaviour if filename-based detection fails
-        if primary_file is None:
-            primary_file = separation[0]
-        if vocal_file is None and len(separation) >= 2:
-            # Use whichever file was not chosen as primary
+        if not non_vocal_files:
+            non_vocal_files = [separation[0]]
+        if not vocal_files and len(separation) >= 2:
             for fname in separation:
-                if fname != primary_file:
-                    vocal_file = fname
+                if fname not in non_vocal_files:
+                    vocal_files.append(fname)
                     break
 
-        stem_path = os.path.join(out_dir, primary_file)
-        audio_data, sr = sf.read(stem_path)
-        stem_arrays.append(audio_data)
-        if sample_rate is None:
-            sample_rate = sr
+        # Load all non-vocal stems; if there are multiple (e.g. Demucs drums/bass/other),
+        # sum them to reconstruct the full instrumental before adding to the ensemble.
+        non_vocal_arrays = []
+        for nf in non_vocal_files:
+            nf_path = os.path.join(out_dir, nf)
+            arr, sr = sf.read(nf_path)
+            non_vocal_arrays.append(arr)
+            if sample_rate is None:
+                sample_rate = sr
+
+        if len(non_vocal_arrays) > 1:
+            min_len = min(a.shape[0] for a in non_vocal_arrays)
+            instrumental = sum(a[:min_len] for a in non_vocal_arrays)
+            instrumental = np.clip(instrumental.astype(np.float32), -1.0, 1.0)
+        else:
+            instrumental = non_vocal_arrays[0]
+
+        stem_arrays.append(instrumental)
 
         # Load the vocal stem for vocal ensembling if available
-        if vocal_file is not None:
-            secondary_path = os.path.join(out_dir, vocal_file)
+        if vocal_files:
+            secondary_path = os.path.join(out_dir, vocal_files[0])
             secondary_data, _ = sf.read(secondary_path)
             secondary_arrays.append(secondary_data)
 
@@ -915,6 +929,14 @@ def ensemble_separator(audio, model_list, algorithm, out_format, progress=gr.Pro
             return np.max(stacked, axis=0)
         elif algorithm == "median":
             return np.median(stacked, axis=0)
+        elif algorithm == "min_magnitude":
+            # Pick the value with the smallest absolute magnitude at each sample.
+            # This reduces bleed-through artifacts (e.g. bass in vocals or
+            # residual voice in instrumental) because artefacts tend to be
+            # lower-amplitude than the true signal in the "wrong" stem.
+            abs_stacked = np.abs(stacked)
+            idx = np.argmin(abs_stacked, axis=0)
+            return np.take_along_axis(stacked, idx[np.newaxis], axis=0)[0]
         else:
             return np.mean(stacked, axis=0)
 
@@ -2420,7 +2442,7 @@ with gr.Blocks(theme = loadThemes.load_json() or "NoCrypt/miku", title = "🎵 U
                 ensemble_algorithm = gr.Dropdown(
                     label = i18n("Ensemble algorithm"),
                     info = i18n("Algorithm used to combine the stem outputs from each model"),
-                    choices = ["average", "min", "max", "median"],
+                    choices = ["average", "min", "max", "median", "min_magnitude"],
                     value = "average",
                     interactive = True
                 )
