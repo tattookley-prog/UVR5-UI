@@ -906,19 +906,24 @@ def ensemble_separator(audio, model_list, algorithm, out_format, progress=gr.Pro
         # addition to vocals; all non-vocal stems must be summed into one instrumental
         # track before ensembling so that none of them are silently discarded.
         #
-        # We extract the stem label from the LAST parenthesised group of the filename
-        # (e.g. "song_(Vocals).wav" → label "vocals") to avoid false positives when
-        # the input filename itself contains the word "vocals" (e.g. "my_vocals_mix.wav"
-        # would otherwise cause all Demucs sub-stems to be misclassified as vocal).
+        # The audio-separator library writes output files as:
+        #   "{audio_base}_({stem_name})_{model_name}.ext"
+        # so the stem label is NOT at the end of the basename (the model name follows
+        # it).  We therefore collect ALL parenthesised groups from the basename and
+        # take the LAST one as the stem label.  Taking the last group avoids false
+        # positives when the input filename itself already contains "(Vocals)" (e.g.
+        # "song_(Vocals)_mix.wav") which would otherwise cause every Demucs sub-stem
+        # file to be misclassified as vocal.
+        _VOCAL_STEM_LABELS = frozenset({"vocals", "lead vocals", "backing vocals"})
         vocal_files = []
         non_vocal_files = []
         for fname in separation:
             fname_no_ext = os.path.splitext(os.path.basename(fname))[0]
-            label_match = re.search(r'\(([^)]+)\)$', fname_no_ext)
-            if label_match:
-                is_vocal = label_match.group(1).lower() == "vocals"
+            groups = re.findall(r'\(([^)]+)\)', fname_no_ext)
+            if groups:
+                is_vocal = groups[-1].lower() in _VOCAL_STEM_LABELS
             else:
-                is_vocal = "(vocals)" in fname.lower()
+                is_vocal = bool(re.search(r'\(vocals\)', fname, re.IGNORECASE))
             if is_vocal:
                 vocal_files.append(fname)
             else:
@@ -952,8 +957,15 @@ def ensemble_separator(audio, model_list, algorithm, out_format, progress=gr.Pro
 
         stem_arrays.append(instrumental)
 
-        # Load the vocal stem for vocal ensembling if available
-        if vocal_files:
+        # Load the vocal stem for vocal ensembling if available.
+        # Multi-stem models (e.g. Demucs with Bass/Drums/Other/Vocals) produce a
+        # "Vocals" stem that has inherent bleed from the other stems (beats, bass,
+        # etc.).  Including such a leaky vocal in the ensemble introduces audible
+        # beat artifacts into the final vocal output.  We therefore only add a
+        # vocal stem to the ensemble when the model is a 2-stem separator (exactly
+        # one non-vocal output), which is the case for all Roformer, MDX-Net and
+        # VR-Arch models.
+        if vocal_files and len(non_vocal_files) == 1:
             secondary_path = os.path.join(out_dir, vocal_files[0])
             secondary_data, _ = sf.read(secondary_path)
             secondary_arrays.append(secondary_data)
