@@ -958,14 +958,33 @@ def ensemble_separator(audio, model_list, algorithm, out_format, progress=gr.Pro
         stem_arrays.append(instrumental)
 
         # Load the vocal stem for vocal ensembling if available.
-        # Multi-stem models (e.g. Demucs with Bass/Drums/Other/Vocals) produce a
-        # "Vocals" stem that has inherent bleed from the other stems (beats, bass,
-        # etc.).  Including such a leaky vocal in the ensemble introduces audible
-        # beat artifacts into the final vocal output.  We therefore only add a
-        # vocal stem to the ensemble when the model is a 2-stem separator (exactly
-        # one non-vocal output), which is the case for all Roformer, MDX-Net and
-        # VR-Arch models.
-        if vocal_files and len(non_vocal_files) == 1:
+        # Two classes of model must be excluded from the vocal ensemble:
+        #
+        # 1. Multi-stem models (e.g. Demucs with Bass/Drums/Other/Vocals) whose
+        #    "Vocals" stem has inherent bleed from the other stems.  These are
+        #    detected by having more than one non-vocal output file.
+        #
+        # 2. Specialty processing models (de-reverb, de-noise, de-echo, crowd
+        #    removal, aspiration removal, etc.) that re-use the standard
+        #    "(Vocals)/(Instrumental)" output labels even though their "(Vocals)"
+        #    output is the full processed audio — not a vocal-isolated track.
+        #    Including such a stem averages the complete mix into the vocal
+        #    ensemble and produces audible beat / instrumental artifacts.
+        #    These models are identified by keywords in their display name or
+        #    filename.
+        _NON_VOCAL_SEPARATOR_KEYWORDS = (
+            "reverb",      # de-reverb models
+            "denoise",     # de-noise models
+            "de-noise",    # alternate spelling
+            "echo",        # de-echo models
+            "crowd",       # crowd-noise removal
+            "aspiration",  # aspiration / breathing removal
+            "drumsep",     # drum-separation models
+        )
+        name_lower = model_display_name.lower()
+        is_specialty_model = any(kw in name_lower for kw in _NON_VOCAL_SEPARATOR_KEYWORDS)
+
+        if vocal_files and len(non_vocal_files) == 1 and not is_specialty_model:
             secondary_path = os.path.join(out_dir, vocal_files[0])
             secondary_data, _ = sf.read(secondary_path)
             secondary_arrays.append(secondary_data)
