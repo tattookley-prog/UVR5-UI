@@ -842,11 +842,12 @@ def _create_separator_for_model(model_display_name, out_format):
 
 @track_presence("Performing Ensemble Separation")
 def ensemble_separator(audio, model_list, algorithm, out_format, progress=gr.Progress(track_tqdm=True)):
-    """Run multiple models on the input audio and combine the primary stems using the chosen algorithm."""
+    """Run multiple models on the input audio and combine the primary and secondary stems using the chosen algorithm."""
     if not model_list or len(model_list) < 2:
         raise gr.Error(i18n("Please select at least 2 models for ensemble separation"))
 
     stem_arrays = []
+    secondary_arrays = []
     sample_rate = None
 
     for i, model_display_name in enumerate(model_list):
@@ -869,34 +870,49 @@ def ensemble_separator(audio, model_list, algorithm, out_format, progress=gr.Pro
         if sample_rate is None:
             sample_rate = sr
 
+        # Load the secondary (second) stem for vocal ensembling if available
+        if len(separation) >= 2:
+            secondary_path = os.path.join(out_dir, separation[1])
+            secondary_data, _ = sf.read(secondary_path)
+            secondary_arrays.append(secondary_data)
+
     progress(0.95, desc="Applying ensemble algorithm...")
 
-    # Trim all stems to the shortest length to allow stacking
-    min_len = min(arr.shape[0] for arr in stem_arrays)
-    stem_arrays = [arr[:min_len] for arr in stem_arrays]
-    stacked = np.stack(stem_arrays, axis=0)
-
-    # Apply the chosen ensemble algorithm element-wise
-    if algorithm == "average":
-        result = np.mean(stacked, axis=0)
-    elif algorithm == "min":
-        result = np.min(stacked, axis=0)
-    elif algorithm == "max":
-        result = np.max(stacked, axis=0)
-    elif algorithm == "median":
-        result = np.median(stacked, axis=0)
-    else:
-        result = np.mean(stacked, axis=0)
-
-    # Clip to valid audio range and save
-    result = np.clip(result.astype(np.float32), -1.0, 1.0)
     input_basename = os.path.splitext(os.path.basename(audio))[0]
+
+    def _apply_algorithm(arrays, algorithm):
+        min_len = min(arr.shape[0] for arr in arrays)
+        arrays = [arr[:min_len] for arr in arrays]
+        stacked = np.stack(arrays, axis=0)
+        if algorithm == "average":
+            return np.mean(stacked, axis=0)
+        elif algorithm == "min":
+            return np.min(stacked, axis=0)
+        elif algorithm == "max":
+            return np.max(stacked, axis=0)
+        elif algorithm == "median":
+            return np.median(stacked, axis=0)
+        else:
+            return np.mean(stacked, axis=0)
+
+    # Combine primary stems
+    result = _apply_algorithm(stem_arrays, algorithm)
+    result = np.clip(result.astype(np.float32), -1.0, 1.0)
     output_filename = f"ensemble_{algorithm}_{input_basename}.{out_format}"
     output_path = os.path.join(out_dir, output_filename)
     sf.write(output_path, result, sample_rate)
 
+    # Combine secondary (vocal) stems if available
+    vocal_output_path = None
+    if secondary_arrays:
+        vocal_result = _apply_algorithm(secondary_arrays, algorithm)
+        vocal_result = np.clip(vocal_result.astype(np.float32), -1.0, 1.0)
+        vocal_filename = f"ensemble_{algorithm}_Vocals_{input_basename}.{out_format}"
+        vocal_output_path = os.path.join(out_dir, vocal_filename)
+        sf.write(vocal_output_path, vocal_result, sample_rate)
+
     progress(1.0, desc="Ensemble separation complete!")
-    return output_path
+    return output_path, vocal_output_path
 
 def update_stems(model):
     if model == "htdemucs_6s.yaml" or model == "MDX23C-DrumSep-aufr33-jarredou.ckpt":
@@ -2400,11 +2416,17 @@ with gr.Blocks(theme = loadThemes.load_json() or "NoCrypt/miku", title = "🎵 U
                     label = i18n("Ensembled output"),
                     type = "filepath"
                 )
+                ensemble_vocal_output = gr.Audio(
+                    show_download_button = True,
+                    interactive = False,
+                    label = i18n("Ensembled vocal output"),
+                    type = "filepath"
+                )
 
             ensemble_button.click(
                 ensemble_separator,
                 [ensemble_audio, ensemble_model_list, ensemble_algorithm, ensemble_output_format],
-                [ensemble_output]
+                [ensemble_output, ensemble_vocal_output]
             )
 
         with gr.TabItem(i18n("Leaderboard")):
