@@ -789,7 +789,13 @@ def _get_ensemble_model_list():
     """Return a combined list of all available model display names for ensemble selection."""
     return list(roformer_models.keys()) + mdx23c_models + mdxnet_models + vrarch_models + demucs_models
 
-def _create_separator_for_model(model_display_name, out_format):
+def _create_separator_for_model(model_display_name, out_format,
+        norm_thresh=0.9, amp_thresh=0.7,
+        vr_aggression=5, vr_window_size=512, vr_enable_tta=True,
+        vr_enable_post_process=False, vr_post_process_threshold=0.2, vr_high_end_process=False,
+        mdx_hop_length=1024, mdx_segment_size=256, mdx_overlap=0.25, mdx_enable_denoise=True,
+        demucs_shifts=2, demucs_segment_size=40, demucs_overlap=0.25,
+        roformer_segment_size=256, roformer_overlap=8, roformer_override_segment_size=False):
     """Create a Separator and return (separator, model_filename) for the given model display name."""
     if model_display_name in roformer_models:
         model_filename = roformer_models[model_display_name]
@@ -799,11 +805,13 @@ def _create_separator_for_model(model_display_name, out_format):
             output_dir=out_dir,
             output_format=out_format,
             use_autocast=use_autocast,
+            normalization_threshold=norm_thresh,
+            amplification_threshold=amp_thresh,
             mdxc_params={
-                "segment_size": 256,
-                "override_model_segment_size": False,
+                "segment_size": roformer_segment_size,
+                "override_model_segment_size": roformer_override_segment_size,
                 "batch_size": 1,
-                "overlap": 8,
+                "overlap": roformer_overlap,
             }
         )
     elif model_display_name in mdx23c_models:
@@ -814,11 +822,13 @@ def _create_separator_for_model(model_display_name, out_format):
             output_dir=out_dir,
             output_format=out_format,
             use_autocast=use_autocast,
+            normalization_threshold=norm_thresh,
+            amplification_threshold=amp_thresh,
             mdxc_params={
-                "segment_size": 256,
-                "override_model_segment_size": False,
+                "segment_size": roformer_segment_size,
+                "override_model_segment_size": roformer_override_segment_size,
                 "batch_size": 1,
-                "overlap": 8,
+                "overlap": roformer_overlap,
             }
         )
     elif model_display_name in mdxnet_models:
@@ -829,12 +839,14 @@ def _create_separator_for_model(model_display_name, out_format):
             output_dir=out_dir,
             output_format=out_format,
             use_autocast=use_autocast,
+            normalization_threshold=norm_thresh,
+            amplification_threshold=amp_thresh,
             mdx_params={
-                "hop_length": 1024,
-                "segment_size": 256,
-                "overlap": 0.25,
+                "hop_length": mdx_hop_length,
+                "segment_size": mdx_segment_size,
+                "overlap": mdx_overlap,
                 "batch_size": 1,
-                "enable_denoise": True,
+                "enable_denoise": mdx_enable_denoise,
             }
         )
     elif model_display_name in vrarch_models:
@@ -845,14 +857,16 @@ def _create_separator_for_model(model_display_name, out_format):
             output_dir=out_dir,
             output_format=out_format,
             use_autocast=use_autocast,
+            normalization_threshold=norm_thresh,
+            amplification_threshold=amp_thresh,
             vr_params={
                 "batch_size": 1,
-                "window_size": 512,
-                "aggression": 5,
-                "enable_tta": True,
-                "enable_post_process": False,
-                "post_process_threshold": 0.2,
-                "high_end_process": False,
+                "window_size": vr_window_size,
+                "aggression": vr_aggression,
+                "enable_tta": vr_enable_tta,
+                "enable_post_process": vr_enable_post_process,
+                "post_process_threshold": vr_post_process_threshold,
+                "high_end_process": vr_high_end_process,
             }
         )
     elif model_display_name in demucs_models:
@@ -863,11 +877,13 @@ def _create_separator_for_model(model_display_name, out_format):
             output_dir=out_dir,
             output_format=out_format,
             use_autocast=use_autocast,
+            normalization_threshold=norm_thresh,
+            amplification_threshold=amp_thresh,
             demucs_params={
                 "batch_size": 1,
-                "segment_size": 40,
-                "shifts": 2,
-                "overlap": 0.25,
+                "segment_size": demucs_segment_size,
+                "shifts": demucs_shifts,
+                "overlap": demucs_overlap,
                 "segments_enabled": True,
             }
         )
@@ -876,7 +892,14 @@ def _create_separator_for_model(model_display_name, out_format):
     return separator, model_filename
 
 @track_presence("Performing Ensemble Separation")
-def ensemble_separator(audio, model_list, algorithm, out_format, progress=gr.Progress(track_tqdm=True)):
+def ensemble_separator(audio, model_list, algorithm, out_format,
+        norm_thresh=0.9, amp_thresh=0.7,
+        vr_aggression=5, vr_window_size=512, vr_enable_tta=True,
+        vr_enable_post_process=False, vr_post_process_threshold=0.2, vr_high_end_process=False,
+        mdx_hop_length=1024, mdx_segment_size=256, mdx_overlap=0.25, mdx_enable_denoise=True,
+        demucs_shifts=2, demucs_segment_size=40, demucs_overlap=0.25,
+        roformer_segment_size=256, roformer_overlap=8, roformer_override_segment_size=False,
+        progress=gr.Progress(track_tqdm=True)):
     """Run multiple models on the input audio and combine the primary and secondary stems using the chosen algorithm."""
     if not model_list or len(model_list) < 2:
         raise gr.Error(i18n("Please select at least 2 models for ensemble separation"))
@@ -888,7 +911,18 @@ def ensemble_separator(audio, model_list, algorithm, out_format, progress=gr.Pro
     for i, model_display_name in enumerate(model_list):
         progress((i / len(model_list)) * 0.9, desc=f"Running model {i + 1}/{len(model_list)}: {model_display_name}...")
 
-        separator, model_filename = _create_separator_for_model(model_display_name, out_format)
+        separator, model_filename = _create_separator_for_model(
+            model_display_name, out_format,
+            norm_thresh=norm_thresh, amp_thresh=amp_thresh,
+            vr_aggression=vr_aggression, vr_window_size=vr_window_size, vr_enable_tta=vr_enable_tta,
+            vr_enable_post_process=vr_enable_post_process, vr_post_process_threshold=vr_post_process_threshold,
+            vr_high_end_process=vr_high_end_process,
+            mdx_hop_length=mdx_hop_length, mdx_segment_size=mdx_segment_size, mdx_overlap=mdx_overlap,
+            mdx_enable_denoise=mdx_enable_denoise,
+            demucs_shifts=demucs_shifts, demucs_segment_size=demucs_segment_size, demucs_overlap=demucs_overlap,
+            roformer_segment_size=roformer_segment_size, roformer_overlap=roformer_overlap,
+            roformer_override_segment_size=roformer_override_segment_size,
+        )
         if separator is None:
             raise gr.Error(f"Unknown model: {model_display_name}")
 
@@ -2522,6 +2556,162 @@ with gr.Blocks(theme = loadThemes.load_json() or "NoCrypt/miku", title = "🎵 U
                     value = "average",
                     interactive = True
                 )
+            with gr.Accordion(i18n("Advanced settings"), open = False):
+                with gr.Group():
+                    with gr.Row():
+                        ensemble_norm_thresh = gr.Slider(
+                            label = i18n("Normalization threshold"),
+                            info = i18n("The threshold for audio normalization"),
+                            minimum = 0.1,
+                            maximum = 1.0,
+                            step = 0.1,
+                            value = 0.9,
+                            interactive = True
+                        )
+                        ensemble_amp_thresh = gr.Slider(
+                            label = i18n("Amplification threshold"),
+                            info = i18n("The threshold for audio amplification"),
+                            minimum = 0.1,
+                            maximum = 1.0,
+                            step = 0.1,
+                            value = 0.7,
+                            interactive = True
+                        )
+                    gr.Markdown("#### " + i18n("VR Arch settings"))
+                    with gr.Row():
+                        ensemble_vr_aggression = gr.Slider(
+                            label = i18n("Agression"),
+                            info = i18n("Intensity of primary stem extraction"),
+                            minimum = 1,
+                            maximum = 50,
+                            step = 1,
+                            value = 5,
+                            interactive = True
+                        )
+                        ensemble_vr_window_size = gr.Dropdown(
+                            label = i18n("Window size"),
+                            info = i18n("Balance quality and speed. 1024 = fast but lower, 320 = slower but better quality"),
+                            choices = [320, 512, 1024],
+                            value = 512,
+                            interactive = True
+                        )
+                    with gr.Row():
+                        ensemble_vr_enable_tta = gr.Checkbox(
+                            label = i18n("TTA"),
+                            info = i18n("Enable Test-Time-Augmentation; slow but improves quality"),
+                            value = True,
+                            interactive = True
+                        )
+                        ensemble_vr_enable_post_process = gr.Checkbox(
+                            label = i18n("Post process"),
+                            info = i18n("Identify leftover artifacts within vocal output; may improve separation for some songs"),
+                            value = False,
+                            interactive = True
+                        )
+                        ensemble_vr_post_process_threshold = gr.Slider(
+                            label = i18n("Post process threshold"),
+                            info = i18n("Threshold for post-processing"),
+                            minimum = 0.1,
+                            maximum = 0.3,
+                            step = 0.1,
+                            value = 0.2,
+                            interactive = True
+                        )
+                        ensemble_vr_high_end_process = gr.Checkbox(
+                            label = i18n("High end process"),
+                            info = i18n("Mirror the missing frequency range of the output"),
+                            value = False,
+                            interactive = True
+                        )
+                    gr.Markdown("#### " + i18n("MDX-NET settings"))
+                    with gr.Row():
+                        ensemble_mdx_hop_length = gr.Dropdown(
+                            label = i18n("Hop length"),
+                            info = i18n("Usually called stride in neural networks; only change if you know what you're doing"),
+                            choices = [256, 512, 1024],
+                            value = 1024,
+                            interactive = True
+                        )
+                        ensemble_mdx_segment_size = gr.Slider(
+                            label = i18n("Segment size"),
+                            info = i18n("Larger consumes more resources, but may give better results"),
+                            minimum = 32,
+                            maximum = 4000,
+                            step = 32,
+                            value = 256,
+                            interactive = True
+                        )
+                    with gr.Row():
+                        ensemble_mdx_overlap = gr.Slider(
+                            label = i18n("Overlap"),
+                            info = i18n("Amount of overlap between prediction windows"),
+                            minimum = 0.001,
+                            maximum = 0.999,
+                            step = 0.001,
+                            value = 0.25,
+                            interactive = True
+                        )
+                        ensemble_mdx_enable_denoise = gr.Checkbox(
+                            label = i18n("Denoise"),
+                            info = i18n("Enable denoising during separation"),
+                            value = True,
+                            interactive = True
+                        )
+                    gr.Markdown("#### " + i18n("Demucs settings"))
+                    with gr.Row():
+                        ensemble_demucs_shifts = gr.Slider(
+                            label = i18n("Shifts"),
+                            info = i18n("Number of predictions with random shifts, higher = slower but better quality"),
+                            minimum = 0,
+                            maximum = 20,
+                            step = 1,
+                            value = 2,
+                            interactive = True
+                        )
+                        ensemble_demucs_segment_size = gr.Slider(
+                            label = i18n("Segment size"),
+                            info = i18n("Size of segments into which the audio is split. Higher = slower but better quality"),
+                            minimum = 1,
+                            maximum = 100,
+                            step = 1,
+                            value = 40,
+                            interactive = True
+                        )
+                        ensemble_demucs_overlap = gr.Slider(
+                            label = i18n("Overlap"),
+                            info = i18n("Overlap between prediction windows. Higher = slower but better quality"),
+                            minimum = 0.001,
+                            maximum = 0.999,
+                            step = 0.001,
+                            value = 0.25,
+                            interactive = True
+                        )
+                    gr.Markdown("#### " + i18n("Roformer / MDX23C settings"))
+                    with gr.Row():
+                        ensemble_roformer_segment_size = gr.Slider(
+                            label = i18n("Segment size"),
+                            info = i18n("Larger consumes more resources, but may give better results"),
+                            minimum = 32,
+                            maximum = 4000,
+                            step = 32,
+                            value = 256,
+                            interactive = True
+                        )
+                        ensemble_roformer_overlap = gr.Slider(
+                            label = i18n("Overlap"),
+                            info = i18n("Amount of overlap between prediction windows"),
+                            minimum = 2,
+                            maximum = 10,
+                            step = 1,
+                            value = 8,
+                            interactive = True
+                        )
+                        ensemble_roformer_override_segment_size = gr.Checkbox(
+                            label = i18n("Override segment size"),
+                            info = i18n("Override model default segment size instead of using the model default value"),
+                            value = False,
+                            interactive = True
+                        )
             with gr.Row():
                 ensemble_audio = gr.Audio(
                     label = i18n("Input audio"),
@@ -2546,7 +2736,13 @@ with gr.Blocks(theme = loadThemes.load_json() or "NoCrypt/miku", title = "🎵 U
 
             ensemble_button.click(
                 ensemble_separator,
-                [ensemble_audio, ensemble_model_list, ensemble_algorithm, ensemble_output_format],
+                [ensemble_audio, ensemble_model_list, ensemble_algorithm, ensemble_output_format,
+                 ensemble_norm_thresh, ensemble_amp_thresh,
+                 ensemble_vr_aggression, ensemble_vr_window_size, ensemble_vr_enable_tta,
+                 ensemble_vr_enable_post_process, ensemble_vr_post_process_threshold, ensemble_vr_high_end_process,
+                 ensemble_mdx_hop_length, ensemble_mdx_segment_size, ensemble_mdx_overlap, ensemble_mdx_enable_denoise,
+                 ensemble_demucs_shifts, ensemble_demucs_segment_size, ensemble_demucs_overlap,
+                 ensemble_roformer_segment_size, ensemble_roformer_overlap, ensemble_roformer_override_segment_size],
                 [ensemble_output, ensemble_vocal_output]
             )
 
