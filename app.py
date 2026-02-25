@@ -863,16 +863,39 @@ def ensemble_separator(audio, model_list, algorithm, out_format, progress=gr.Pro
         if not separation:
             raise gr.Error(f"Model {model_display_name} produced no output")
 
-        # Load the primary (first) stem for ensembling
-        stem_path = os.path.join(out_dir, separation[0])
+        # Identify stems by filename: find the vocal stem and the non-vocal (primary) stem.
+        # The audio-separator library names output files with stem type labels such as
+        # "(Vocals)", "(Instrumental)", "(No Vocals)", etc.  We cannot rely on the
+        # position in the list because different models return stems in different orders.
+        vocal_file = None
+        primary_file = None
+        for fname in separation:
+            fname_lower = fname.lower()
+            if "(vocals)" in fname_lower or "_vocals_" in fname_lower or fname_lower.startswith("vocals_"):
+                vocal_file = fname
+            else:
+                if primary_file is None:
+                    primary_file = fname
+
+        # Fall back to positional behaviour if filename-based detection fails
+        if primary_file is None:
+            primary_file = separation[0]
+        if vocal_file is None and len(separation) >= 2:
+            # Use whichever file was not chosen as primary
+            for fname in separation:
+                if fname != primary_file:
+                    vocal_file = fname
+                    break
+
+        stem_path = os.path.join(out_dir, primary_file)
         audio_data, sr = sf.read(stem_path)
         stem_arrays.append(audio_data)
         if sample_rate is None:
             sample_rate = sr
 
-        # Load the secondary (second) stem for vocal ensembling if available
-        if len(separation) >= 2:
-            secondary_path = os.path.join(out_dir, separation[1])
+        # Load the vocal stem for vocal ensembling if available
+        if vocal_file is not None:
+            secondary_path = os.path.join(out_dir, vocal_file)
             secondary_data, _ = sf.read(secondary_path)
             secondary_arrays.append(secondary_data)
 
