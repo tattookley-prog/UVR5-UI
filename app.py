@@ -799,6 +799,12 @@ def _create_separator_for_model(model_display_name, out_format):
             output_dir=out_dir,
             output_format=out_format,
             use_autocast=use_autocast,
+            mdxc_params={
+                "segment_size": 256,
+                "override_model_segment_size": False,
+                "batch_size": 1,
+                "overlap": 8,
+            }
         )
     elif model_display_name in mdx23c_models:
         model_filename = model_display_name
@@ -808,6 +814,12 @@ def _create_separator_for_model(model_display_name, out_format):
             output_dir=out_dir,
             output_format=out_format,
             use_autocast=use_autocast,
+            mdxc_params={
+                "segment_size": 256,
+                "override_model_segment_size": False,
+                "batch_size": 1,
+                "overlap": 8,
+            }
         )
     elif model_display_name in mdxnet_models:
         model_filename = model_display_name
@@ -817,6 +829,13 @@ def _create_separator_for_model(model_display_name, out_format):
             output_dir=out_dir,
             output_format=out_format,
             use_autocast=use_autocast,
+            mdx_params={
+                "hop_length": 1024,
+                "segment_size": 256,
+                "overlap": 0.25,
+                "batch_size": 1,
+                "enable_denoise": True,
+            }
         )
     elif model_display_name in vrarch_models:
         model_filename = model_display_name
@@ -826,6 +845,15 @@ def _create_separator_for_model(model_display_name, out_format):
             output_dir=out_dir,
             output_format=out_format,
             use_autocast=use_autocast,
+            vr_params={
+                "batch_size": 1,
+                "window_size": 512,
+                "aggression": 5,
+                "enable_tta": True,
+                "enable_post_process": False,
+                "post_process_threshold": 0.2,
+                "high_end_process": False,
+            }
         )
     elif model_display_name in demucs_models:
         model_filename = model_display_name
@@ -835,6 +863,13 @@ def _create_separator_for_model(model_display_name, out_format):
             output_dir=out_dir,
             output_format=out_format,
             use_autocast=use_autocast,
+            demucs_params={
+                "batch_size": 1,
+                "segment_size": 40,
+                "shifts": 2,
+                "overlap": 0.25,
+                "segments_enabled": True,
+            }
         )
     else:
         return None, None
@@ -870,11 +905,21 @@ def ensemble_separator(audio, model_list, algorithm, out_format, progress=gr.Pro
         # Multi-stem models (e.g. Demucs htdemucs_ft) produce bass/drums/other in
         # addition to vocals; all non-vocal stems must be summed into one instrumental
         # track before ensembling so that none of them are silently discarded.
+        #
+        # We extract the stem label from the LAST parenthesised group of the filename
+        # (e.g. "song_(Vocals).wav" → label "vocals") to avoid false positives when
+        # the input filename itself contains the word "vocals" (e.g. "my_vocals_mix.wav"
+        # would otherwise cause all Demucs sub-stems to be misclassified as vocal).
         vocal_files = []
         non_vocal_files = []
         for fname in separation:
-            fname_lower = fname.lower()
-            if "(vocals)" in fname_lower or "_vocals_" in fname_lower or fname_lower.startswith("vocals_"):
+            fname_no_ext = os.path.splitext(os.path.basename(fname))[0]
+            label_match = re.search(r'\(([^)]+)\)$', fname_no_ext)
+            if label_match:
+                is_vocal = label_match.group(1).lower() == "vocals"
+            else:
+                is_vocal = "(vocals)" in fname.lower()
+            if is_vocal:
                 vocal_files.append(fname)
             else:
                 non_vocal_files.append(fname)
